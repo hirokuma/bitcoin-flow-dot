@@ -1,185 +1,199 @@
 #!/usr/bin/env python3
 """
-Bitcoin Transaction Flow to DOT Language Generator
-
-このスクリプトは、Bitcoinトランザクションのvinとvoutの情報を含むテキストファイルから
-トランザクションフローをDOT言語形式で出力します。
-
-入力ファイル形式例:
-TRANSACTION txid1
-VIN prev_txid1:output_index1 value1
-VIN prev_txid2:output_index2 value2
-VOUT address1 value1
-VOUT address2 value2
-
-TRANSACTION txid2
-VIN prev_txid3:output_index3 value3
-VOUT address3 value3
+Bitcoin Transaction Flow Visualizer
+Generates DOT language output from Bitcoin transaction vin/vout data
 """
 
-import re
+import json
 import sys
 from collections import defaultdict
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set
 
-class BitcoinTransaction:
-    def __init__(self, txid: str):
-        self.txid = txid
-        self.vins = []  # List of (prev_txid, output_index, value)
-        self.vouts = []  # List of (address, value)
-
-class BitcoinFlowGenerator:
+class BitcoinFlowVisualizer:
     def __init__(self):
         self.transactions = {}
-        self.addresses = set()
-        self.tx_connections = defaultdict(list)  # prev_txid -> [current_txid]
+        self.edges = []
 
-    def parse_file(self, filename: str) -> None:
-        """テキストファイルからトランザクション情報を解析"""
-        current_tx = None
+    def parse_transaction_file(self, filename: str):
+        """
+        Parse transaction data from text file
+        Expected format (JSON lines or structured text):
+        {"txid": "abc123", "vin": [...], "vout": [...]}
+        """
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
 
-        with open(filename, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
+                    try:
+                        # Try parsing as JSON
+                        tx_data = json.loads(line)
+                        self.process_transaction(tx_data)
+                    except json.JSONDecodeError:
+                        # Try parsing as structured text
+                        self.parse_text_format(line)
 
-                try:
-                    if line.startswith('TRANSACTION'):
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            txid = parts[1]
-                            current_tx = BitcoinTransaction(txid)
-                            self.transactions[txid] = current_tx
+        except FileNotFoundError:
+            print(f"Error: File '{filename}' not found.")
+            sys.exit(1)
 
-                    elif line.startswith('VIN') and current_tx:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            prev_output = parts[1]  # prev_txid:output_index
-                            value = float(parts[2])
+    def parse_text_format(self, line: str):
+        """
+        Parse simple text format:
+        txid:abc123 vin:prev_txid:0,prev_txid2:1 vout:addr1:amount1,addr2:amount2
+        """
+        parts = line.split(' ')
+        tx_data = {'vin': [], 'vout': []}
 
-                            if ':' in prev_output:
-                                prev_txid, output_index = prev_output.split(':', 1)
-                                current_tx.vins.append((prev_txid, int(output_index), value))
-                                self.tx_connections[prev_txid].append(current_tx.txid)
+        for part in parts:
+            if part.startswith('txid:'):
+                tx_data['txid'] = part[5:]
+            elif part.startswith('vin:'):
+                vin_str = part[4:]
+                if vin_str and vin_str != 'coinbase':
+                    for vin_item in vin_str.split(','):
+                        if ':' in vin_item:
+                            prev_txid, vout_idx = vin_item.split(':', 1)
+                            tx_data['vin'].append({
+                                'txid': prev_txid,
+                                'vout': int(vout_idx)
+                            })
+            elif part.startswith('vout:'):
+                vout_str = part[5:]
+                if vout_str:
+                    for i, vout_item in enumerate(vout_str.split(',')):
+                        if ':' in vout_item:
+                            addr, amount = vout_item.split(':', 1)
+                            tx_data['vout'].append({
+                                'n': i,
+                                'scriptPubKey': {'addresses': [addr]},
+                                'value': float(amount)
+                            })
 
-                    elif line.startswith('VOUT') and current_tx:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            address = parts[1]
-                            value = float(parts[2])
-                            current_tx.vouts.append((address, value))
-                            self.addresses.add(address)
+        if 'txid' in tx_data:
+            self.process_transaction(tx_data)
 
-                except (ValueError, IndexError) as e:
-                    print(f"Warning: Line {line_num} parse error: {e}", file=sys.stderr)
-                    continue
+    def process_transaction(self, tx_data: Dict):
+        """Process a single transaction"""
+        txid = tx_data.get('txid', '')
+        if not txid:
+            return
 
-    def generate_dot(self, output_file: str = None) -> str:
-        """DOT言語形式でフローグラフを生成"""
-        dot_content = []
-        dot_content.append('digraph BitcoinFlow {')
-        dot_content.append('    rankdir=LR;')
-        dot_content.append('    node [shape=box];')
-        dot_content.append('')
+        # Store transaction data
+        self.transactions[txid] = {
+            'vin': tx_data.get('vin', []),
+            'vout': tx_data.get('vout', [])
+        }
 
-        # ノードの定義
-        dot_content.append('    // Transaction nodes')
-        for txid, tx in self.transactions.items():
-            total_in = sum(vin[2] for vin in tx.vins)
-            total_out = sum(vout[1] for vout in tx.vouts)
-            label = f"{txid[:8]}...\\nIn: {total_in:.4f}\\nOut: {total_out:.4f}"
-            dot_content.append(f'    "{txid}" [label="{label}", style=filled, fillcolor=lightblue];')
+        # Create edges from inputs to this transaction
+        for vin in tx_data.get('vin', []):
+            if 'txid' in vin and vin['txid'] != 'coinbase':
+                prev_txid = vin['txid']
+                prev_vout = vin.get('vout', 0)
+                self.edges.append((prev_txid, prev_vout, txid))
 
-        dot_content.append('')
-        dot_content.append('    // Address nodes')
-        for address in self.addresses:
-            short_addr = f"{address[:8]}...{address[-8:]}" if len(address) > 20 else address
-            dot_content.append(f'    "{address}" [label="{short_addr}", style=filled, fillcolor=lightgreen, shape=ellipse];')
+    def generate_node_label(self, txid: str) -> str:
+        """Generate node label in the specified format"""
+        tx = self.transactions.get(txid, {'vin': [], 'vout': []})
 
-        # エッジの定義
-        dot_content.append('')
-        dot_content.append('    // Transaction to transaction connections')
-        for prev_txid, next_txids in self.tx_connections.items():
-            if prev_txid in self.transactions:
-                for next_txid in next_txids:
-                    dot_content.append(f'    "{prev_txid}" -> "{next_txid}" [color=blue];')
+        # Generate input ports
+        vin_parts = []
+        for i, vin in enumerate(tx['vin']):
+            vin_parts.append(f"<in{i}>in#{i}")
 
-        dot_content.append('')
-        dot_content.append('    // Transaction to address connections (outputs)')
-        for txid, tx in self.transactions.items():
-            for address, value in tx.vouts:
-                dot_content.append(f'    "{txid}" -> "{address}" [label="{value:.4f}", color=green];')
+        # Generate output ports
+        vout_parts = []
+        for i, vout in enumerate(tx['vout']):
+            vout_parts.append(f"<out{i}>out#{i}")
 
-        # 可能であれば、アドレスからトランザクションへの接続も表示
-        dot_content.append('')
-        dot_content.append('    // Address to transaction connections (inputs)')
-        address_to_tx = defaultdict(list)
-        for txid, tx in self.transactions.items():
-            for prev_txid, output_index, value in tx.vins:
-                if prev_txid in self.transactions:
-                    prev_tx = self.transactions[prev_txid]
-                    if output_index < len(prev_tx.vouts):
-                        source_address = prev_tx.vouts[output_index][0]
-                        address_to_tx[source_address].append((txid, value))
+        # Construct label
+        vin_section = "|".join(vin_parts) if vin_parts else ""
+        vout_section = "|".join(vout_parts) if vout_parts else ""
 
-        for address, connections in address_to_tx.items():
-            for txid, value in connections:
-                dot_content.append(f'    "{address}" -> "{txid}" [label="{value:.4f}", color=red, style=dashed];')
+        if vin_section and vout_section:
+            label = f"{txid}|{{{vin_section}|{{{vout_section}}}}}"
+        elif vin_section:
+            label = f"{txid}|{{{vin_section}}}"
+        elif vout_section:
+            label = f"{txid}|{{{vout_section}}}"
+        else:
+            label = txid
 
-        dot_content.append('}')
+        return label
 
-        result = '\n'.join(dot_content)
+    def generate_dot(self) -> str:
+        """Generate DOT language output"""
+        dot_lines = [
+            "digraph bitcoin_flow {",
+            "    rankdir=LR;",
+            "    node [shape=record, fontname=\"Arial\", fontsize=10];",
+            "    edge [fontname=\"Arial\", fontsize=8];",
+            ""
+        ]
 
-        if output_file:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(result)
-            print(f"DOT file generated: {output_file}")
+        # Add nodes
+        for txid in self.transactions:
+            label = self.generate_node_label(txid)
+            # Escape special characters in DOT
+            escaped_label = label   # .replace('"', '\\"').replace('|', '\\|').replace('{', '\\{').replace('}', '\\}').replace('<', '\\<').replace('>', '\\>')
+            dot_lines.append(f'    "{txid}" [label="{escaped_label}"];')
 
-        return result
+        dot_lines.append("")
+
+        # Add edges
+        for prev_txid, prev_vout, curr_txid in self.edges:
+            if prev_txid in self.transactions and curr_txid in self.transactions:
+                # Find the input index in current transaction
+                curr_tx = self.transactions[curr_txid]
+                input_idx = 0
+                for i, vin in enumerate(curr_tx['vin']):
+                    if vin.get('txid') == prev_txid and vin.get('vout') == prev_vout:
+                        input_idx = i
+                        break
+
+                dot_lines.append(f'    "{prev_txid}":out{prev_vout} -> "{curr_txid}":in{input_idx};')
+
+        dot_lines.extend([
+            "",
+            "}"
+        ])
+
+        return "\n".join(dot_lines)
+
+    def save_dot_file(self, output_filename: str):
+        """Save DOT output to file"""
+        dot_content = self.generate_dot()
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            f.write(dot_content)
+        print(f"DOT file saved as: {output_filename}")
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python bitcoin_flow_dot.py <input_file> [output_file]")
-        print("\nInput file format:")
-        print("TRANSACTION txid1")
-        print("VIN prev_txid1:output_index1 value1")
-        print("VIN prev_txid2:output_index2 value2")
-        print("VOUT address1 value1")
-        print("VOUT address2 value2")
+        print("Usage: python bitcoin_flow_viz.py <input_file> [output_file]")
         print("")
-        print("TRANSACTION txid2")
-        print("VIN prev_txid3:output_index3 value3")
-        print("VOUT address3 value3")
+        print("Input file formats supported:")
+        print("1. JSON Lines: {\"txid\": \"abc123\", \"vin\": [...], \"vout\": [...]}")
+        print("2. Text format: txid:abc123 vin:prev_txid:0,prev_txid2:1 vout:addr1:1.5,addr2:2.3")
+        print("")
+        print("Example:")
+        print("python bitcoin_flow_viz.py transactions.txt bitcoin_flow.dot")
         sys.exit(1)
 
     input_file = sys.argv[1]
-    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+    output_file = sys.argv[2] if len(sys.argv) > 2 else "bitcoin_flow.dot"
 
-    generator = BitcoinFlowGenerator()
+    visualizer = BitcoinFlowVisualizer()
 
-    try:
-        generator.parse_file(input_file)
-        print(f"Parsed {len(generator.transactions)} transactions")
-        print(f"Found {len(generator.addresses)} unique addresses")
+    print(f"Parsing transactions from: {input_file}")
+    visualizer.parse_transaction_file(input_file)
 
-        dot_content = generator.generate_dot(output_file)
+    print(f"Found {len(visualizer.transactions)} transactions")
+    print(f"Found {len(visualizer.edges)} connections")
 
-        if not output_file:
-            print("\n" + "="*50)
-            print("DOT LANGUAGE OUTPUT:")
-            print("="*50)
-            print(dot_content)
-            print("\nTo visualize, save to .dot file and use:")
-            print("dot -Tpng -o graph.png graph.dot")
-            print("dot -Tsvg -o graph.svg graph.dot")
-
-    except FileNotFoundError:
-        print(f"Error: File '{input_file}' not found")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    visualizer.save_dot_file(output_file)
+    print(f"To visualize: dot -Tpng {output_file} -o bitcoin_flow.png")
 
 if __name__ == "__main__":
     main()

@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """
 Esplora API Transaction Fetcher
-
-TXID一覧のテキストファイルを読み取り、Esplora APIからトランザクション情報を取得して
-Bitcoin Flow DOT Generator用の形式で出力するプログラム
-
-使用方法:
-python esplora_fetcher.py txid_list.txt [output.txt]
+Fetches Bitcoin transaction data from Esplora API and outputs in JSON Lines format
 """
 
 import requests
@@ -15,183 +10,279 @@ import sys
 import time
 from typing import Dict, List, Optional
 
-class EsploraClient:
+class EsploraFetcher:
     def __init__(self, base_url: str = "http://localhost:8094/regtest/api"):
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
-        # リクエスト間隔の制御用
-        self.request_delay = 0.1  # 100ms
+        # Set reasonable timeouts
+        self.session.timeout = 30
 
     def get_transaction(self, txid: str) -> Optional[Dict]:
-        """指定されたTXIDのトランザクション情報を取得"""
+        """
+        Fetch transaction data from Esplora API
+        Returns transaction data or None if failed
+        """
         url = f"{self.base_url}/tx/{txid}"
 
         try:
-            response = self.session.get(url, timeout=10)
+            print(f"Fetching: {txid}")
+            response = self.session.get(url)
             response.raise_for_status()
-            time.sleep(self.request_delay)  # レート制限対策
             return response.json()
+
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching transaction {txid}: {e}", file=sys.stderr)
+            print(f"Error fetching {txid}: {e}")
             return None
         except json.JSONDecodeError as e:
-            print(f"Error decoding JSON for transaction {txid}: {e}", file=sys.stderr)
+            print(f"Error parsing JSON for {txid}: {e}")
             return None
 
-    def get_transaction_output_addresses(self, txid: str, vout_index: int) -> Optional[str]:
-        """指定されたトランザクションの出力アドレスを取得"""
-        tx_data = self.get_transaction(txid)
-        if not tx_data or 'vout' not in tx_data:
-            return None
+    def process_transaction(self, tx_data: Dict) -> Dict:
+        """
+        Process raw Esplora transaction data into our format
+        """
+        txid = tx_data.get('txid', '')
 
-        if vout_index >= len(tx_data['vout']):
-            return None
+        # Process inputs (vin)
+        vin = []
+        for input_data in tx_data.get('vin', []):
+            try:
+                if 'txid' in input_data and input_data['txid']:
+                    # Regular input
+                    vin.append({
+                        'txid': input_data['txid'],
+                        'vout': input_data.get('vout', 0)
+                    })
+                else:
+                    # Coinbase input or missing txid
+                    vin.append({
+                        'txid': 'coinbase',
+                        'vout': 0
+                    })
+            except Exception as e:
+                print(f"Warning: Error processing vin for {txid}: {e}")
+                # Add a fallback coinbase entry
+                vin.append({
+                    'txid': 'coinbase',
+                    'vout': 0
+                })
 
-        vout = tx_data['vout'][vout_index]
-        if 'scriptpubkey_address' in vout:
-            return vout['scriptpubkey_address']
-        elif 'scriptpubkey_addresses' in vout and vout['scriptpubkey_addresses']:
-            return vout['scriptpubkey_addresses'][0]  # 最初のアドレスを返す
-        else:
-            # アドレスが取得できない場合はscriptの種類を返す
-            script_type = vout.get('scriptpubkey_type', 'unknown')
-            return f"[{script_type}]"
+        # Process outputs (vout)
+        vout = []
+        for i, output_data in enumerate(tx_data.get('vout', [])):
+            try:
+                vout_entry = {
+                    'n': i,
+                    'value': output_data.get('value', 0) / 100000000.0,  # Convert satoshis to BTC
+                    'scriptPubKey': {}
+                }
 
-class TransactionProcessor:
-    def __init__(self, esplora_client: EsploraClient):
-        self.client = esplora_client
+                # Extract script information
+                script_pubkey = output_data.get('scriptpubkey', {})
+                if not script_pubkey:
+                    script_pubkey = output_data.get('scriptPubKey', {})  # Try alternative key
 
-    def satoshi_to_btc(self, satoshi: int) -> float:
-        """SatoshiをBTCに変換"""
-        return satoshi / 100000000.0
-
-    def process_txid_list(self, input_file: str) -> List[str]:
-        """TXIDファイルを読み込んでトランザクション情報を処理"""
-        output_lines = []
-
-        # TXIDファイルを読み込み
-        try:
-            with open(input_file, 'r', encoding='utf-8') as f:
-                txids = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-        except FileNotFoundError:
-            print(f"Error: File '{input_file}' not found", file=sys.stderr)
-            return []
-        except Exception as e:
-            print(f"Error reading file '{input_file}': {e}", file=sys.stderr)
-            return []
-
-        print(f"Processing {len(txids)} transactions...")
-
-        for i, txid in enumerate(txids, 1):
-            print(f"Fetching transaction {i}/{len(txids)}: {txid}")
-
-            tx_data = self.client.get_transaction(txid)
-            if not tx_data:
-                print(f"Warning: Could not fetch transaction {txid}", file=sys.stderr)
-                continue
-
-            output_lines.append(f"TRANSACTION {txid}")
-
-            # VIN処理
-            if 'vin' in tx_data:
-                for vin in tx_data['vin']:
-                    if 'txid' in vin and 'vout' in vin:
-                        prev_txid = vin['txid']
-                        prev_vout = vin['vout']
-
-                        # 前のトランザクションの出力値を取得
-                        if 'prevout' in vin and 'value' in vin['prevout']:
-                            value_satoshi = vin['prevout']['value']
-                            value_btc = self.satoshi_to_btc(value_satoshi)
-                        else:
-                            # prevoutが無い場合は前のトランザクションから取得を試みる
-                            prev_tx = self.client.get_transaction(prev_txid)
-                            if prev_tx and 'vout' in prev_tx and prev_vout < len(prev_tx['vout']):
-                                value_satoshi = prev_tx['vout'][prev_vout]['value']
-                                value_btc = self.satoshi_to_btc(value_satoshi)
-                            else:
-                                value_btc = 0.0
-                                print(f"Warning: Could not get input value for {txid}", file=sys.stderr)
-
-                        output_lines.append(f"VIN {prev_txid}:{prev_vout} {value_btc:.8f}")
-                    elif 'coinbase' in vin:
-                        # Coinbase transaction
-                        output_lines.append("VIN coinbase:0 0.0")
-
-            # VOUT処理
-            if 'vout' in tx_data:
-                for vout in tx_data['vout']:
-                    value_satoshi = vout.get('value', 0)
-                    value_btc = self.satoshi_to_btc(value_satoshi)
-
-                    # アドレス取得
-                    if 'scriptpubkey_address' in vout:
-                        address = vout['scriptpubkey_address']
-                    elif 'scriptpubkey_addresses' in vout and vout['scriptpubkey_addresses']:
-                        address = vout['scriptpubkey_addresses'][0]
+                if isinstance(script_pubkey, dict):
+                    if 'address' in script_pubkey:
+                        vout_entry['scriptPubKey']['addresses'] = [script_pubkey['address']]
+                    elif 'addresses' in script_pubkey:
+                        vout_entry['scriptPubKey']['addresses'] = script_pubkey['addresses']
                     else:
-                        # アドレスが取得できない場合
-                        script_type = vout.get('scriptpubkey_type', 'unknown')
-                        script_hex = vout.get('scriptpubkey', '')[:20] + ('...' if len(vout.get('scriptpubkey', '')) > 20 else '')
-                        address = f"[{script_type}:{script_hex}]"
+                        # Fallback for scripts without addresses
+                        script_type = script_pubkey.get('type', 'unknown')
+                        vout_entry['scriptPubKey']['addresses'] = [f"script_{script_type}"]
+                else:
+                    # If scriptpubkey is not a dict, create a fallback
+                    vout_entry['scriptPubKey']['addresses'] = [f"output_{i}"]
 
-                    output_lines.append(f"VOUT {address} {value_btc:.8f}")
+                vout.append(vout_entry)
 
-            output_lines.append("")  # トランザクション間の空行
+            except Exception as e:
+                print(f"Warning: Error processing vout {i} for {txid}: {e}")
+                # Add a fallback entry
+                vout.append({
+                    'n': i,
+                    'value': 0.0,
+                    'scriptPubKey': {'addresses': [f"error_output_{i}"]}
+                })
 
-        return output_lines
+        return {
+            'txid': txid,
+            'vin': vin,
+            'vout': vout
+        }
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python esplora_fetcher.py <txid_list_file> [output_file] [esplora_url]")
-        print("\nTXID list file format:")
-        print("txid1")
-        print("txid2")
-        print("txid3")
-        print("# コメント行は無視されます")
-        print("\nDefault Esplora URL: http://localhost:8094/regtest/api")
-        print("\nExample:")
-        print("python esplora_fetcher.py txids.txt transactions.txt")
-        print("python esplora_fetcher.py txids.txt transactions.txt http://localhost:8094/mainnet/api")
-        sys.exit(1)
+    def read_txid_list(self, filename: str) -> List[str]:
+        """
+        Read TXID list from file
+        Each line should contain one TXID
+        """
+        txids = []
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        # Remove any extra whitespace and validate format
+                        txid = line.split()[0]  # Take first word if multiple
+                        if len(txid) == 64:  # Bitcoin TXID is 64 hex characters
+                            txids.append(txid)
+                        else:
+                            print(f"Warning: Invalid TXID format: {txid}")
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2] if len(sys.argv) > 2 else None
-    esplora_url = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:8094/regtest/api"
+            print(f"Found {len(txids)} valid TXIDs in {filename}")
+            return txids
 
-    # Esploraクライアント初期化
-    client = EsploraClient(esplora_url)
-    processor = TransactionProcessor(client)
+        except FileNotFoundError:
+            print(f"Error: File '{filename}' not found.")
+            sys.exit(1)
 
-    print(f"Using Esplora API: {esplora_url}")
+    def fetch_all_transactions(self, txids: List[str], delay: float = 0.1) -> List[Dict]:
+        """
+        Fetch all transactions with optional delay between requests
+        """
+        transactions = []
+        total = len(txids)
 
-    # トランザクション情報を処理
-    output_lines = processor.process_txid_list(input_file)
+        for i, txid in enumerate(txids):
+            print(f"Progress: {i+1}/{total}")
 
-    if not output_lines:
-        print("No transactions processed successfully")
-        sys.exit(1)
+            tx_data = self.get_transaction(txid)
+            if tx_data:
+                processed_tx = self.process_transaction(tx_data)
+                transactions.append(processed_tx)
 
-    # 結果を出力
-    result = '\n'.join(output_lines)
+            # Add delay to avoid overwhelming the API
+            if delay > 0 and i < total - 1:
+                time.sleep(delay)
 
-    if output_file:
+        print(f"Successfully fetched {len(transactions)} transactions")
+        return transactions
+
+    def save_json_lines(self, transactions: List[Dict], output_file: str):
+        """
+        Save transactions in JSON Lines format
+        """
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(result)
-            print(f"\nTransaction data saved to: {output_file}")
-            print(f"Processed {len([line for line in output_lines if line.startswith('TRANSACTION')])} transactions")
-        except Exception as e:
-            print(f"Error writing to file '{output_file}': {e}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        print("\n" + "="*50)
-        print("TRANSACTION DATA OUTPUT:")
-        print("="*50)
-        print(result)
+                for tx in transactions:
+                    json.dump(tx, f, separators=(',', ':'))
+                    f.write('\n')
 
-    print(f"\nYou can now use this output with the Bitcoin Flow DOT Generator:")
-    print(f"python bitcoin_flow_dot.py {output_file if output_file else 'output.txt'} flow.dot")
+            print(f"Transactions saved to: {output_file}")
+
+        except Exception as e:
+            print(f"Error saving file: {e}")
+            sys.exit(1)
+
+    def save_text_format(self, transactions: List[Dict], output_file: str):
+        """
+        Save transactions in simple text format
+        """
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                for tx in transactions:
+                    txid = tx['txid']
+
+                    # Format vin
+                    vin_parts = []
+                    for vin in tx['vin']:
+                        if vin['txid'] == 'coinbase':
+                            vin_parts.append('coinbase')
+                        else:
+                            vin_parts.append(f"{vin['txid']}:{vin['vout']}")
+                    vin_str = ','.join(vin_parts) if vin_parts else 'coinbase'
+
+                    # Format vout
+                    vout_parts = []
+                    for vout in tx['vout']:
+                        addresses = vout.get('scriptPubKey', {}).get('addresses', ['unknown'])
+                        addr = addresses[0] if addresses else 'unknown'
+                        vout_parts.append(f"{addr}:{vout['value']}")
+                    vout_str = ','.join(vout_parts)
+
+                    f.write(f"txid:{txid} vin:{vin_str} vout:{vout_str}\n")
+
+            print(f"Transactions saved to: {output_file}")
+
+        except Exception as e:
+            print(f"Error saving file: {e}")
+            sys.exit(1)
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python esplora_fetcher.py <txid_list_file> <output_file> [options]")
+        print("")
+        print("Options:")
+        print("  --base-url URL    Esplora API base URL (default: http://localhost:8094/regtest/api)")
+        print("  --delay SECONDS   Delay between API requests (default: 0.1)")
+        print("  --format FORMAT   Output format: json|text (default: json)")
+        print("")
+        print("Examples:")
+        print("  python esplora_fetcher.py txids.txt transactions.json")
+        print("  python esplora_fetcher.py txids.txt transactions.txt --format text")
+        print("  python esplora_fetcher.py txids.txt data.json --base-url http://localhost:8094/regtest/api --delay 0.2")
+        sys.exit(1)
+
+    txid_file = sys.argv[1]
+    output_file = sys.argv[2]
+
+    # Parse options
+    base_url = "http://localhost:8094/regtest/api"
+    delay = 0.1
+    output_format = "json"
+
+    i = 3
+    while i < len(sys.argv):
+        if sys.argv[i] == "--base-url" and i + 1 < len(sys.argv):
+            base_url = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == "--delay" and i + 1 < len(sys.argv):
+            try:
+                delay = float(sys.argv[i + 1])
+            except ValueError:
+                print("Error: Invalid delay value")
+                sys.exit(1)
+            i += 2
+        elif sys.argv[i] == "--format" and i + 1 < len(sys.argv):
+            output_format = sys.argv[i + 1]
+            if output_format not in ['json', 'text']:
+                print("Error: Format must be 'json' or 'text'")
+                sys.exit(1)
+            i += 2
+        else:
+            print(f"Error: Unknown option {sys.argv[i]}")
+            sys.exit(1)
+
+    # Initialize fetcher
+    fetcher = EsploraFetcher(base_url)
+
+    print(f"Using Esplora API: {base_url}")
+    print(f"Request delay: {delay} seconds")
+    print(f"Output format: {output_format}")
+    print("")
+
+    # Read TXID list
+    txids = fetcher.read_txid_list(txid_file)
+    if not txids:
+        print("No valid TXIDs found in input file")
+        sys.exit(1)
+
+    # Fetch transactions
+    transactions = fetcher.fetch_all_transactions(txids, delay)
+
+    if not transactions:
+        print("No transactions were successfully fetched")
+        sys.exit(1)
+
+    # Save results
+    if output_format == "json":
+        fetcher.save_json_lines(transactions, output_file)
+    else:
+        fetcher.save_text_format(transactions, output_file)
+
+    print(f"\nReady to visualize with:")
+    print(f"python bitcoin_flow_dot.py {output_file}")
 
 if __name__ == "__main__":
     main()
