@@ -10,7 +10,9 @@
 ## 手順
 
 * TXID一覧のテキストファイルを作る(`txids.txt`など)
-* `python esplora_fetcher.py txids.txt transactions.txt` (必要があれば `base_url` を指定する)
-* `python bitcoin_flow_dot.py transactions.txt flow.dot`
+  * 特定のTXIDにラベルを付けたければ、コンマで区切って文字列を書く
+  * 特定のアドレスをラベルに変換したければ、`addr_map.json` を作って編集する
+* `python esplora_fetcher.py txids.txt transactions.json` (必要があればオプションを指定する)
+* `python bitcoin_flow_dot.py transactions.json bitcoin_flow.dot`
 
 できあがった dotファイルを graphviz で見る。
