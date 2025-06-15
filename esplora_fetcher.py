@@ -71,29 +71,12 @@ class EsploraFetcher:
         vout = []
         for i, output_data in enumerate(tx_data.get('vout', [])):
             try:
+                address = output_data.get('scriptpubkey_address', f"output_{i}")
                 vout_entry = {
                     'n': i,
-                    'value': output_data.get('value', 0) / 100000000.0,  # Convert satoshis to BTC
-                    'scriptPubKey': {}
+                    'value': output_data.get('value', 0),
+                    'address': address # Use raw address
                 }
-
-                # Extract script information
-                script_pubkey = output_data.get('scriptpubkey', {})
-                if not script_pubkey:
-                    script_pubkey = output_data.get('scriptPubKey', {})  # Try alternative key
-
-                if isinstance(script_pubkey, dict):
-                    if 'address' in script_pubkey:
-                        vout_entry['scriptPubKey']['addresses'] = [script_pubkey['address']]
-                    elif 'addresses' in script_pubkey:
-                        vout_entry['scriptPubKey']['addresses'] = script_pubkey['addresses']
-                    else:
-                        # Fallback for scripts without addresses
-                        script_type = script_pubkey.get('type', 'unknown')
-                        vout_entry['scriptPubKey']['addresses'] = [f"script_{script_type}"]
-                else:
-                    # If scriptpubkey is not a dict, create a fallback
-                    vout_entry['scriptPubKey']['addresses'] = [f"output_{i}"]
 
                 vout.append(vout_entry)
 
@@ -103,7 +86,7 @@ class EsploraFetcher:
                 vout.append({
                     'n': i,
                     'value': 0.0,
-                    'scriptPubKey': {'addresses': [f"error_output_{i}"]}
+                    'address': f"error_output_{i}"
                 })
 
         return {
@@ -196,8 +179,7 @@ class EsploraFetcher:
                     # Format vout
                     vout_parts = []
                     for vout in tx['vout']:
-                        addresses = vout.get('scriptPubKey', {}).get('addresses', ['unknown'])
-                        addr = addresses[0] if addresses else 'unknown'
+                        addr = vout.get('address', 'unknown')
                         vout_parts.append(f"{addr}:{vout['value']}")
                     vout_str = ','.join(vout_parts)
 

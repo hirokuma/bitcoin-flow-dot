@@ -13,6 +13,29 @@ class BitcoinFlowVisualizer:
     def __init__(self):
         self.transactions = {}
         self.edges = []
+        self.addr_map = {}
+        self._load_addr_map_from_file()
+
+    def _load_addr_map_from_file(self, filename: str = "addr_map.json"):
+        """Load address map from a JSON file if it exists."""
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.addr_map.update(data)
+                print(f"Loaded address map from {filename}")
+        except FileNotFoundError:
+            print(f"Info: '{filename}' not found. Address labels will be shortened if not in default map.")
+        except json.JSONDecodeError as e:
+            print(f"Error: Could not decode '{filename}': {e}. Address labels will be shortened.")
+
+    def convert_address(self, address: str) -> str:
+        """Converts a Bitcoin address to a predefined label or a shortened version."""
+        if not address: # Handle cases where address might be None or empty
+            return "unknown_address"
+        addr = self.addr_map.get(address)
+        if addr is None:
+            addr = f"{address[:4]}...{address[-4:]}"
+        return addr
 
     def parse_transaction_file(self, filename: str):
         """
@@ -68,7 +91,7 @@ class BitcoinFlowVisualizer:
                             addr, amount = vout_item.split(':', 1)
                             tx_data['vout'].append({
                                 'n': i,
-                                'scriptPubKey': {'addresses': [addr]},
+                                'address': addr,
                                 'value': float(amount)
                             })
 
@@ -106,7 +129,10 @@ class BitcoinFlowVisualizer:
         # Generate output ports
         vout_parts = []
         for i, vout in enumerate(tx['vout']):
-            vout_parts.append(f"<out{i}>out#{i}")
+            raw_addr = vout.get('address')
+            converted_addr = self.convert_address(raw_addr)
+            value = '{:,}'.format(int(vout.get('value')))
+            vout_parts.append(f"<out{i}>#{i} {converted_addr}: {value}\\l")
 
         # Construct label
         vin_section = "|".join(vin_parts) if vin_parts else ""
@@ -128,7 +154,8 @@ class BitcoinFlowVisualizer:
         dot_lines = [
             "digraph bitcoin_flow {",
             "    rankdir=LR;",
-            "    node [shape=record, fontname=\"Arial\", fontsize=10];",
+            "    graph [fontname=\"monospace\"];",
+            "    node [shape=record, fontname=\"monospace\", fontsize=10];",
             "    edge [fontname=\"Arial\", fontsize=8];",
             ""
         ]
