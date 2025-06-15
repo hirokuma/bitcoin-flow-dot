@@ -107,7 +107,8 @@ class BitcoinFlowVisualizer:
         # Store transaction data
         self.transactions[txid] = {
             'vin': tx_data.get('vin', []),
-            'vout': tx_data.get('vout', [])
+            'vout': tx_data.get('vout', []),
+            'tx_label': tx_data.get('tx_label'),
         }
 
         # Create edges from inputs to this transaction
@@ -137,6 +138,10 @@ class BitcoinFlowVisualizer:
         # Construct label
         vin_section = "|".join(vin_parts) if vin_parts else ""
         vout_section = "|".join(vout_parts) if vout_parts else ""
+
+        # transaction label
+        if len(tx['tx_label']) != 0:
+            txid = f"{txid}\\n{tx['tx_label']}"
 
         if vin_section and vout_section:
             label = f"{txid}|{{{vin_section}|{{{vout_section}}}}}"

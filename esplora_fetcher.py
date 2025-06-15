@@ -37,7 +37,7 @@ class EsploraFetcher:
             print(f"Error parsing JSON for {txid}: {e}")
             return None
 
-    def process_transaction(self, tx_data: Dict) -> Dict:
+    def process_transaction(self, tx_data: Dict, tx_label: str) -> Dict:
         """
         Process raw Esplora transaction data into our format
         """
@@ -91,6 +91,7 @@ class EsploraFetcher:
 
         return {
             'txid': txid,
+            'tx_label': tx_label,
             'vin': vin,
             'vout': vout
         }
@@ -107,9 +108,13 @@ class EsploraFetcher:
                     line = line.strip()
                     if line and not line.startswith('#'):
                         # Remove any extra whitespace and validate format
-                        txid = line.split()[0]  # Take first word if multiple
+                        l = line.split(',')
+                        label = ''
+                        if len(l) == 2:
+                            label = l[1]
+                        txid = l[0]  # Take first word if multiple
                         if len(txid) == 64:  # Bitcoin TXID is 64 hex characters
-                            txids.append(txid)
+                            txids.append({'txid': txid, 'label': label})
                         else:
                             print(f"Warning: Invalid TXID format: {txid}")
 
@@ -130,9 +135,9 @@ class EsploraFetcher:
         for i, txid in enumerate(txids):
             print(f"Progress: {i+1}/{total}")
 
-            tx_data = self.get_transaction(txid)
+            tx_data = self.get_transaction(txid.get('txid'))
             if tx_data:
-                processed_tx = self.process_transaction(tx_data)
+                processed_tx = self.process_transaction(tx_data, txid.get('label', ''))
                 transactions.append(processed_tx)
 
             # Add delay to avoid overwhelming the API
