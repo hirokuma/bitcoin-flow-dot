@@ -92,6 +92,8 @@ class EsploraFetcher:
         return {
             'txid': txid,
             'tx_label': tx_label,
+            'size': tx_data.get('size', -1),
+            'fee': tx_data.get('fee', -1),
             'vin': vin,
             'vout': vout
         }
