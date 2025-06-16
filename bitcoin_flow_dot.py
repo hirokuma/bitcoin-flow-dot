@@ -144,7 +144,7 @@ class BitcoinFlowVisualizer:
             txid = f"{txid}\\n{tx['tx_label']}"
 
         if vin_section and vout_section:
-            label = f"{txid}|{{{vin_section}|{{{vout_section}}}}}"
+            label = f"{txid}|{{{{{vin_section}}}|{{{vout_section}}}}}"
         elif vin_section:
             label = f"{txid}|{{{vin_section}}}"
         elif vout_section:
