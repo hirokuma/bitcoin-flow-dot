@@ -5,15 +5,17 @@
 > Bitcoinトランザクションのvinとvoutをまとめたテキストファイルから、それのフローを出力するdot言語に出力するコードを生成する。プログラミング言語はなんでもよい。
 
 > TXID一覧のテキストファイルを読み取り Esplora API でトランザクションを取得し、この入力ファイル形式で出力するプログラムを作成。
-> http://localhost:8094/regtest/api
 
 ## 手順
 
 * TXID一覧のテキストファイルを作る(`txids.txt`など)
   * 特定のTXIDにラベルを付けたければ、コンマで区切って文字列を書く
   * 特定のアドレスをラベルに変換したければ、`addr_map.json` を作って編集する
-* `python esplora_fetcher.py txids.txt transactions.json --base-url http://localhost:3002`
-* `python bitcoin_flow_dot.py transactions.json bitcoin_flow.dot`
+
+```console
+$ python esplora_fetcher.py txids.txt transactions.json
+$ python bitcoin_flow_dot.py transactions.json bitcoin_flow.dot
+```
 
 できあがった dotファイルはビュアーで閲覧したり `dot` コマンドで画像ファイルに変換するなりできる。
 
@@ -32,7 +34,7 @@ $ python esplora_fetcher.py
 Usage: python esplora_fetcher.py <txid_list_file> <output_file> [options]
 
 Options:
-  --base-url URL    Esplora API base URL (default: http://localhost:8094/regtest/api)
+  --base-url URL    Esplora API base URL (default: http://localhost:3002)
   --delay SECONDS   Delay between API requests (default: 0.1)
   --format FORMAT   Output format: json|text (default: json)
 
@@ -57,4 +59,3 @@ Input file formats supported:
 Example:
 python bitcoin_flow_viz.py transactions.txt bitcoin_flow.dot
 ```
-

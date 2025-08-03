@@ -10,8 +10,9 @@ import sys
 import time
 from typing import Dict, List, Optional
 
+DEFAULT_BASE_URL = "http://localhost:3002"
 class EsploraFetcher:
-    def __init__(self, base_url: str = "http://localhost:8094/regtest/api"):
+    def __init__(self, base_url: str):
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
         # Set reasonable timeouts
@@ -203,7 +204,7 @@ def main():
         print("Usage: python esplora_fetcher.py <txid_list_file> <output_file> [options]")
         print("")
         print("Options:")
-        print("  --base-url URL    Esplora API base URL (default: http://localhost:8094/regtest/api)")
+        print("  --base-url URL    Esplora API base URL (default: {})".format(DEFAULT_BASE_URL))
         print("  --delay SECONDS   Delay between API requests (default: 0.1)")
         print("  --format FORMAT   Output format: json|text (default: json)")
         print("")
@@ -217,7 +218,7 @@ def main():
     output_file = sys.argv[2]
 
     # Parse options
-    base_url = "http://localhost:8094/regtest/api"
+    base_url = DEFAULT_BASE_URL
     delay = 0.1
     output_format = "json"
 
@@ -272,6 +273,7 @@ def main():
 
     print(f"\nReady to visualize with:")
     print(f"python bitcoin_flow_dot.py {output_file}")
+
 
 if __name__ == "__main__":
     main()
